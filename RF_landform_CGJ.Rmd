@@ -1,0 +1,1062 @@
+---
+title: "RF_landform_rmd"
+author: "Netra Regmi"
+date: "10/10/2021"
+output: html_document
+---
+
+```{r  remove all}
+rm(list=ls(all=TRUE))
+
+```
+
+```{r packages}
+
+require(sp)
+require(rgdal)
+require(raster)
+library(randomForest)
+require(caTools)
+require(caret)
+require(mlbench)
+library(tictoc)
+library(rpart.plot)
+library(xlsx)
+library(ranger)
+library(splitTools)
+library(plyr)
+library(MLmetrics)
+require (gridExtra)
+library(pROC)
+library(ROCR)
+
+library(dplyr)
+library(ggplot2)
+
+```
+
+```{r definations}
+seed<-42
+m <- "Accuracy"
+m1<-"ROC"
+
+height=8
+width =6
+
+ts =12
+ls=12
+cex=1
+cex1=1.2
+lwd=1
+vjust=-4
+hjust =4
+b = seq(0.1, 1, .05)
+xlab1="Prediction Probability"
+
+```
+
+```{r import vector data}
+setwd("D:/landform_new/data/landform")
+
+s1 <- readOGR('ridge.shp')
+s2 <- readOGR('concave.shp')
+s3 <- readOGR('convex.shp')
+s4 <- readOGR('planar.shp')
+s5 <- readOGR('channel.shp')
+s6 <- readOGR('valley_bottom.shp')
+s7 <- readOGR('upland_plateau.shp')
+
+s<-bind(s1,s2,s3,s4,s5,s6,s7)
+p <- as.data.frame(coordinates(s)[,-3])
+p1<-subset(s, select = c(landform))
+
+```
+
+```{r import raster data}
+
+setwd("D:/landform_new/covariates/2m")
+r1_2m<-raster('dem2', na.rm=TRUE)
+r2_2m<-raster('slp', na.rm=TRUE)
+r3_2m<-raster('prc', na.rm=TRUE)
+r4_2m<-raster('plc', na.rm=TRUE)
+r5_2m<-raster('tc', na.rm=TRUE)
+r6_2m<-raster('facc', na.rm=TRUE)
+r7_2m<-raster('sr', na.rm=TRUE)
+r8_2m<- raster('swi2.tif', na.rm=TRUE)
+
+xvars_2m = stack(crop (stack(r2_2m,r3_2m,r4_2m,r5_2m,r6_2m,r7_2m, r8_2m), r1_2m), r1_2m)
+v_2m <- as.data.frame(extract(xvars_2m, p))
+
+v1_2m<-cbind.data.frame(v_2m,p1)
+v1_2m<-subset(v1_2m, select = -c(coords.x1, coords.x2, optional))
+v1_2m[v1_2m==""] <- NA
+v1_2m<- na.omit(v1_2m)
+v1_2m$landform <- as.factor(v1_2m$landform)
+v1_2m <-na.exclude(v1_2m)
+
+covariates_5m################
+setwd("D:/landform_new/covariates/5m")
+r1_5m<-raster('dem5', na.rm=TRUE)
+r2_5m<-raster('slp', na.rm=TRUE)
+r3_5m<-raster('prc', na.rm=TRUE)
+r4_5m<-raster('plc', na.rm=TRUE)
+r5_5m<-raster('tc', na.rm=TRUE)
+r6_5m<-raster('facc', na.rm=TRUE)
+r7_5m<-raster('sr', na.rm=TRUE)
+r8_5m<- raster('swi5.tif', na.rm=TRUE)
+
+xvars_5m = stack(crop (stack(r2_5m,r3_5m,r4_5m,r5_5m,r6_5m,r7_5m, r8_5m), r1_5m), r1_5m)
+v_5m <- as.data.frame(extract(xvars_5m, p))
+
+v1_5m<-cbind.data.frame(v_5m,p1)
+v1_5m<-subset(v1_5m, select = -c(coords.x1, coords.x2, optional))
+v1_5m[v1_5m==""] <- NA
+v1_5m<- na.omit(v1_5m)
+v1_5m$landform <- as.factor(v1_5m$landform)
+v1_5m <-na.exclude(v1_5m)
+
+covariates_10m################
+setwd("D:/landform_new/covariates/10m")
+r1_10m<-raster('dem10', na.rm=TRUE)
+r2_10m<-raster('slp', na.rm=TRUE)
+r3_10m<-raster('prc', na.rm=TRUE)
+r4_10m<-raster('plc', na.rm=TRUE)
+r5_10m<-raster('tc', na.rm=TRUE)
+r6_10m<-raster('facc', na.rm=TRUE)
+r7_10m<-raster('sr', na.rm=TRUE)
+r8_10m<- raster('swi10.tif', na.rm=TRUE)
+
+xvars_10m = stack(crop (stack(r2_10m,r3_10m,r4_10m,r5_10m,r6_10m,r7_10m, r8_10m), r1_10m), r1_10m)
+v_10m <- as.data.frame(extract(xvars_10m, p))
+
+v1_10m<-cbind.data.frame(v_10m,p1)
+v1_10m<-subset(v1_10m, select = -c(coords.x1, coords.x2, optional))
+v1_10m[v1_10m==""] <- NA
+v1_10m<- na.omit(v1_10m)
+v1_10m$landform <- as.factor(v1_10m$landform)
+v1_10m <-na.exclude(v1_10m)
+
+```
+
+2m_analysis#####
+
+```{r training and testing 2m}
+library(splitstackshape)
+
+s_2m <- stratified(v1_2m, c("landform"), size = 420, 
+                   replace=FALSE, prob=NULL, keep.rownames = TRUE, bothSets=T)
+tr_2m <- v1_2m[(s_2m$SAMP1$rn),]
+te_2m <- v1_2m[(s_2m$SAMP2$rn),]
+
+```
+
+```{r preprocessiing 2m}
+
+bm2<-preProcess(tr_2m, method = "bagImpute")
+tr2<-predict(bm2, newdata = tr_2m)
+te2<-predict(bm2, te_2m)
+
+```
+
+```{r feature elemination by recrusive elimination 2m}
+
+tr2re<-tr2
+#levels(trainre$layer)=c("No","Yes")
+
+tic()
+subsets<- c(1:50)
+set.seed(seed)
+rc <- rfeControl(functions = rfFuncs,
+                      method = "cv",
+                      verbose = F)
+
+re2<-rfe(x = tr2re[,1:8],
+               y = tr2re$landform,
+               sizes = subsets,
+               rfeControl = rc)
+
+toc()
+
+
+```
+
+```{r grid search custom parameter tuning 2m}
+
+tr2t<-tr2[,c("landform", re2$optVariables)]
+tr2_st<-tr2t
+levels(tr2_st$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), 
+                                  class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+#############################
+library(doParallel)
+c3 <- trainControl(method="cv", number=10,savePredictions = T,
+                   classProbs = TRUE, allowParallel = TRUE)
+tgc <- expand.grid(.mtry=c(1:8),.ntree=c(50, 100, 200, 300, 400, 500))
+
+
+set.seed(seed)
+
+rf2_c <- train(landform~., data=tr2_st, method=customRF, metric=m1, tuneGrid=tgc, trControl=c3)
+
+summary(rf_c)
+plot(rf_c)
+
+#roc(rf_c$pred$pred, rf_c$pred$obs)
+```
+
+```{r tuneRF 2m}
+set.seed(seed)
+xx=tr2_st[,1:8]
+yy=tr2_st[,9]
+improve = 1e-06
+sf=1.5
+
+tf1 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 500)
+tf2 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 400)
+tf3 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 300)
+tf4 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 200)
+tf5 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 100)
+tf6 <- tuneRF(xx,yy, stepFactor = sf, improve = improve, ntree = 50)
+
+plot(tf1[,1],(1-tf1[,2])); lines(tf1[,1],(1-tf1[,2]))
+points(bm2[,1],(1-bm2[,2]), pch=1); lines(bm2[,1],(1-bm2[,2]))
+points(bm3[,1],(1-bm3[,2]), pch=16)
+points(bm4[,1],(1-bm4[,2]), pch=21)
+points(bm5[,1],(1-bm5[,2]), pch=15)
+
+```
+
+```{r model developmen caret 2m}
+
+tr2o<-tr2_st
+
+folds=5
+cvIndex <- createFolds(factor(tr2o$landform), folds, returnTrain = T)
+
+cm <- trainControl(index=cvIndex, method="CV", number=folds,
+                   search="grid",
+                   savePred = T, classProbs = T)
+
+set.seed(seed)
+tgm<- expand.grid(.mtry=c(3))
+
+rf_tr2 <- train(landform~., data=tr2o, method="rf",
+              norm.votes=T, type = "Classification", 
+              metric=m, ntree=200, tuneGrid = tgm, trControl=cm)
+
+print(rf_tr2)
+
+```
+
+
+5m_analysis#####
+
+```{r training and testing 5m}
+library(splitstackshape)
+
+s_5m <- stratified(v1_5m, c("landform"), size = 420, 
+                   replace=FALSE, prob=NULL, keep.rownames = TRUE, bothSets=T)
+tr_5m <- v1_5m[(s_5m$SAMP1$rn),]
+te_5m <- v1_5m[(s_5m$SAMP2$rn),]
+
+```
+
+```{r preprocessiing 5m}
+
+bm5<-preProcess(tr_5m, method = "bagImpute")
+tr5<-predict(bm5, newdata = tr_5m)
+te5<-predict(bm5, te_5m)
+
+```
+
+```{r feature elemination by recrusive elimination 5m}
+
+tr5re<-tr5
+#levels(trainre$layer)=c("No","Yes")
+
+tic()
+subsets<- c(1:50)
+set.seed(seed)
+rc <- rfeControl(functions = rfFuncs,
+                      method = "cv",
+                      verbose = F)
+
+re5<-rfe(x = tr5re[,1:8],
+               y = tr5re$landform,
+               sizes = subsets,
+               rfeControl = rc)
+
+toc()
+
+
+```
+
+```{r grid search custom parameter tuning 5m}
+
+tr5t<-tr5[,c("landform", re5$optVariables)]
+tr5_st<-tr5t
+levels(tr5_st$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), 
+                                  class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+#############################
+library(doParallel)
+c3 <- trainControl(method="cv", number=10,savePredictions = T,
+                   classProbs = TRUE, allowParallel = TRUE)
+tgc <- expand.grid(.mtry=c(1:8),.ntree=c(50, 100, 200, 300, 400, 500))
+
+
+set.seed(seed)
+
+rf5_c <- train(landform~., data=tr5_st, method=customRF, metric=m1, tuneGrid=tgc, trControl=c3)
+
+summary(rf5_c)
+plot(rf5_c)
+
+```
+
+```{r model developmen caret 5m}
+
+tr5o<-tr5_st
+
+folds=5
+cvIndex <- createFolds(factor(tr5o$landform), folds, returnTrain = T)
+
+cm <- trainControl(index=cvIndex, method="CV", number=folds,
+                   search="grid",
+                   savePred = T, classProbs = T)
+
+set.seed(seed)
+tgm<- expand.grid(.mtry=c(3))
+
+rf_tr5 <- train(landform~., data=tr5o, method="rf",
+              norm.votes=T, type = "Classification", 
+              metric=m, ntree=200, tuneGrid = tgm, trControl=cm)
+
+print(rf_tr5)
+
+```
+
+
+10m_analysis
+
+```{r training and testing 10m}
+s_10m <- stratified(v1_10m, c("landform"), size = 420, 
+                   replace=FALSE, prob=NULL, keep.rownames = TRUE, bothSets=T)
+tr_10m <- v1_10m[(s_10m$SAMP1$rn),]
+te_10m <- v1_10m[(s_10m$SAMP2$rn),]
+```
+
+```{r preprocessiing 10m}
+
+bm10<-preProcess(tr_10m, method = "bagImpute")
+tr10<-predict(bm10, newdata = tr_10m)
+te10<-predict(bm10, te_10m)
+
+```
+
+```{r feature elemination by recrusive elimination 10m}
+
+tr10re<-tr10
+#levels(trainre$layer)=c("No","Yes")
+
+tic()
+subsets<- c(1:50)
+set.seed(seed)
+rc <- rfeControl(functions = rfFuncs,
+                      method = "cv",
+                      verbose = F)
+
+re10<-rfe(x = tr10re[,1:8],
+               y = tr10re$landform,
+               sizes = subsets,
+               rfeControl = rc)
+
+toc()
+
+
+```
+
+```{r grid search custom parameter tuning 10m}
+
+tr10t<-tr10[,c("landform", re10$optVariables)]
+tr10_st<-tr10t
+levels(tr10_st$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+
+#############################
+library(doParallel)
+c3 <- trainControl(method="cv", number=10,savePredictions = T,
+                   classProbs = TRUE, allowParallel = TRUE)
+tgc <- expand.grid(.mtry=c(1:8),.ntree=c(50, 100, 200, 300, 400, 500))
+
+
+set.seed(seed)
+
+rf10_c <- train(landform~., data=tr10_st, method=customRF, metric=m1, tuneGrid=tgc, trControl=c3)
+
+summary(rf10_c)
+plot(rf10_c)
+
+```
+
+```{r model developmen caret 10m}
+
+tr10o<-tr10_st
+
+folds=5
+cvIndex <- createFolds(factor(tr2o$landform), folds, returnTrain = T)
+
+cm <- trainControl(index=cvIndex, method="CV", number=folds,
+                   search="grid",
+                   savePred = T, classProbs = T)
+
+set.seed(seed)
+tgm<- expand.grid(.mtry=c(3))
+
+rf_tr10 <- train(landform~., data=tr2o, method="rf",
+              norm.votes=T, type = "Classification", 
+              metric=m, ntree=200, tuneGrid = tgm, trControl=cm)
+
+print(rf_tr2)
+
+```
+
+
+randomforest_model_all####
+
+```{r model development randomForest all}
+
+rf_train2<- randomForest(landform ~ ., data=tr2, mtry = 7, ntree = 500, importance=T)
+
+rf_train5<- randomForest(landform ~ ., data=tr5, mtry = 7, ntree = 500, importance=T)
+
+rf_train10<- randomForest(landform ~ ., data=tr10, mtry = 7, ntree = 500, importance=T)
+
+
+```
+
+accuracy_ROC_Curves####
+
+```{r model accuracy 2m}
+
+
+p2<-rf_tr2$pred
+
+acc=data.frame()
+ for(i in unique(p2$Resample)){
+   
+  ob=anti_join(p2, subset(p2, p2$Resample==i))[,"obs"]
+  pr=anti_join(p2, subset(p2, p2$Resample==i))[,"pred"]
+  result=data.frame(Accuracy(ob, pr))
+  acc=rbind(acc,result)
+  
+ }
+colnames(acc)<-c("Accuracy")
+
+freq=data.frame()
+ for(i in unique(p2$Resample)){
+   
+  ob=anti_join(p2, subset(p2, p2$Resample==i))[,"obs"]
+  pr=anti_join(p2, subset(p2, p2$Resample==i))[,"pred"]
+  result.fr=data.frame(sum(count(ob)[,2]))
+  freq=rbind(freq,result.fr)
+ }
+colnames(freq)<-c("Freq")
+
+acc2<-cbind(acc, freq, rf_tr2$resample, plyr::count(p2$Resample))
+
+acc_mean<-cbind(Accuracy(rf_tr2$pred$pred, rf_tr2$pred$obs), rf_tr2$results)
+
+write.table(acc2, "D:/landform_new/results/acc_2m.txt", sep = "\t")
+write.table(acc_mean, "D:/landform_new/results/acc_2m_mean.txt", sep = "\t")
+
+```
+
+```{r model accuracy 5m}
+
+p5<-rf_tr5$pred
+
+acc5=data.frame()
+ for(i in unique(p5$Resample)){
+   
+  ob=anti_join(p5, subset(p5, p5$Resample==i))[,"obs"]
+  pr=anti_join(p5, subset(p5, p5$Resample==i))[,"pred"]
+  result=data.frame(Accuracy(ob, pr))
+  acc5=rbind(acc5,result)
+  
+ }
+colnames(acc5)<-c("Accuracy")
+
+freq5=data.frame()
+ for(i in unique(p5$Resample)){
+   
+  ob=anti_join(p5, subset(p5, p5$Resample==i))[,"obs"]
+  pr=anti_join(p5, subset(p5, p5$Resample==i))[,"pred"]
+  result.fr=data.frame(sum(count(ob)[,2]))
+  freq5=rbind(freq5,result.fr)
+ }
+colnames(freq5)<-c("Freq")
+
+acc5<-cbind(acc5, freq5, rf_tr5$resample, plyr::count(p5$Resample))
+
+acc5_mean<-cbind(Accuracy(rf_tr5$pred$pred, rf_tr5$pred$obs), rf_tr5$results)
+
+write.table(acc5, "D:/landform_new/results/acc_5m.txt", sep = "\t")
+write.table(acc5_mean, "D:/landform_new/results/acc_5m_mean.txt", sep = "\t")
+
+```
+
+```{r model accuracy 10m}
+
+p10<-rf_tr10$pred
+
+acc10=data.frame()
+ for(i in unique(p10$Resample)){
+   
+  ob=anti_join(p10, subset(p10, p10$Resample==i))[,"obs"]
+  pr=anti_join(p10, subset(p10, p10$Resample==i))[,"pred"]
+  result=data.frame(Accuracy(ob, pr))
+  acc10=rbind(acc10,result)
+  
+ }
+colnames(acc10)<-c("Accuracy")
+
+freq10=data.frame()
+ for(i in unique(p10$Resample)){
+   
+  ob=anti_join(p10, subset(p10, p10$Resample==i))[,"obs"]
+  pr=anti_join(p10, subset(p10, p10$Resample==i))[,"pred"]
+  result.fr=data.frame(sum(count(ob)[,2]))
+  freq10=rbind(freq10,result.fr)
+ }
+colnames(freq10)<-c("Freq")
+
+acc10<-cbind(acc10, freq10, rf_tr10$resample, plyr::count(p10$Resample))
+
+acc10_mean<-cbind(Accuracy(rf_tr10$pred$pred, rf_tr10$pred$obs), rf_tr10$results)
+
+write.table(acc10, "D:/landform_new/results/acc_10m.txt", sep = "\t")
+write.table(acc10_mean, "D:/landform_new/results/acc_10m_mean.txt", sep = "\t")
+
+```
+
+```{r predict_models}
+library(tcltk)
+setwd("D:/landform_new/results/predicted")
+
+predict(xvars_2m, rf_train2, filename="rf_tr2_2m.img", type="response", index=1, na.rm=TRUE, progress="window", overwrite=TRUE)
+
+predict(xvars_5m, rf_train5, filename="rf_tr5_5m.img", type="response", index=1, na.rm=TRUE, progress="window", overwrite=TRUE)
+
+predict(xvars_10m, rf_train10, filename="rf_tr10_10m.img", type="response", index=1, na.rm=TRUE, progress="window", overwrite=TRUE)
+
+ptrain5m = raster('rf_tr5_5m.img', na.rm=TRUE)
+ptrain10m = raster('rf_tr10_10m.img', na.rm=TRUE)
+
+```
+
+All_plots####
+```{r density plots 2m_5m_10m}
+
+setwd("D:/landform_new/results")
+pdf("density_2m_5m_10m.pdf", paper="a4r", height=6, width=8)
+
+d2<-v1_2m
+d5<-v1_5m
+d10<-v1_10m
+
+d2$ln_facc<-log(d2$facc)
+levels(d2$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+
+d5$ln_facc<-log(d5$facc)
+levels(d5$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+
+d10$ln_facc<-log(d10$facc)
+levels(d10$landform)=c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+  
+ylab="Density"
+
+theme<-trellis.par.get()
+featurePlot(x=d2[,c("dem2", "sr", "slp", "swi2", "tc", "ln_facc"),],
+            y=d2$landform, 
+            plot = "density",
+            type="1",
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")),
+            lwd=c(1,1),
+            labels=c("Covariate value", ylab),
+            label.size=c(4,4),
+            
+            auto.key = list(columns = 4))
+
+theme<-trellis.par.get()
+featurePlot(x=d5[,c("dem5", "sr", "slp", "swi5", "tc", "ln_facc"),],
+            y=d5$landform, 
+            plot = "density",
+            type="1",
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")),
+            lwd=c(1,1),
+            labels=c("Covariate value", ylab),
+            label.size=c(4,4),
+            
+            auto.key = list(columns = 4))
+
+featurePlot(x=d10[,c("dem10", "sr", "slp", "swi10", "tc", "ln_facc"),],
+            y=d10$landform, 
+            plot = "density",
+            type="1",
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")),
+            lwd=c(1,1),
+            labels=c("Covariate value", ylab),
+            label.size=c(4,4),
+            
+            auto.key = list(columns = 4))
+
+dev.off()
+
+```
+
+```{r RFE accuracy_importance plot 2m_5m_10m}
+
+imp1<- varImpPlot(rf_train2, type=2)
+imp2<- varImpPlot(rf_train5, type=2)
+imp3<- varImpPlot(rf_train10, type=2)
+
+bimp<-cbind(imp1,imp2, imp3)
+bimp<-as.data.frame(bimp)
+bimp$Covariates <- c("slp", "prc", "plc", "tc", "facc", "sr", "swi", "dem")
+names(bimp)<-c("Gini_2m", "Gini_5m", "Gini_10m", "Covariates")
+
+bimp1<-bimp[order(bimp$Gini_2m),]
+
+
+setwd("D:/landform_new/results")
+pdf("RFE_importance_2m_5m_10m.pdf", paper="a4r", height=5, width=10)
+par(mfrow=c(1,2))
+
+
+plot(re2$results$Variables, re2$results$Accuracy, 
+     xlab="Number of covariates", ylab="Accuracy",
+     ylim=c(0.6,1),
+     pch =21, bg="green", cex=cex1)
+
+points(re5$results$Variables, re5$results$Accuracy, 
+     xlab="Number of covariates", ylab="Accuracy",
+     ylim=c(0.6,1),
+     pch =21, bg="blue", cex=cex1)
+
+points(re10$results$Variables, re10$results$Accuracy, 
+     xlab="Number of covariates", ylab="Accuracy",
+     ylim=c(0.6,1),
+     pch =21, bg="red", cex=cex1)
+
+
+
+plot(bimp1$Gini_2m, pch =21, bg="green", cex=cex1, ylim=c(0,800),
+     xlab="Covariates", ylab="MeanDecreaseGini", xaxt = 'n')
+points(bimp1$Gini_5m, pch =21, bg="blue", cex=cex1)
+points(bimp1$Gini_10m, pch =21, bg="red", cex=cex1)
+
+axis(1, at=1:8, labels=bimp1$Covariates)
+
+legend("topleft", legend=c("2 m", "5 m", "10 m"), pch=c(21, 21, 21),
+       pt.bg =c("green", "red", "blue"),  cex=cex1)
+
+
+dev.off()
+
+```
+
+```{r hyperparameter_matrix plot_2m_5m_10m}
+library(ggplot2)
+library(gridBase)
+library(grid)
+library(gridExtra)
+
+F1<-ggplot(rf2_c$results,aes(x=as.factor(mtry),
+                             y=as.factor(ntree),fill=Accuracy))+
+  geom_raster() +
+  theme_bw()+
+     #scale_fill_gradientn(colours =  grey(seq(1, 0, length =256)))+
+  scale_fill_continuous(guide = "none")+
+  theme(aspect.ratio = 0.75)+
+  labs(x="Covariates to split", y="Number of tree")+
+  theme( axis.title.x = element_text(size=ts, vjust=vjust))+
+  theme( axis.title.y = element_text(size=ts, vjust=hjust))+
+  theme( axis.text.x = element_text(size=ls))+
+  theme( axis.text.y = element_text(size=ls))+
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  theme(axis.text.x = element_text(vjust = -2))+
+  theme(axis.text.y = element_text(hjust = -0.5))
+  
+F2<-ggplot(rf5_c$results,aes(x=as.factor(mtry),
+                             y=as.factor(ntree),fill=Accuracy))+
+  geom_raster() +
+  theme_bw()+
+     #scale_fill_gradientn(colours =  grey(seq(1, 0, length =256)))+
+  scale_fill_continuous(guide = "none")+
+  theme(aspect.ratio = 0.75)+
+  labs(x="Covariates to split", y="")+
+  theme( axis.title.x = element_text(size=ts, vjust=vjust))+
+  theme( axis.title.y = element_text(size=ts, vjust=hjust))+
+  theme( axis.text.x = element_text(size=ls))+
+  theme( axis.text.y = element_text(size=ls))+
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  theme(axis.text.x = element_text(vjust = -2))+
+  theme(axis.text.y = element_text(hjust = -0.5))
+
+F3<-ggplot(rf10_c$results,aes(x=as.factor(mtry),
+                             y=as.factor(ntree),fill=Accuracy))+
+  geom_raster() +
+  theme_bw()+
+     #scale_fill_gradientn(colours =  grey(seq(1, 0, length =256)))+
+  #scale_fill_continuous(guide = "none")+
+  guides(fill = guide_colourbar(barwidth = 0.5, barheight = 5, 
+                                nbin = 100))+
+  theme(aspect.ratio = 0.75)+
+  labs(x="Covariates to split", y="")+
+  theme( axis.title.x = element_text(size=ts, vjust=vjust))+
+  theme( axis.title.y = element_text(size=ts, vjust=hjust))+
+  theme( axis.text.x = element_text(size=ls))+
+  theme( axis.text.y = element_text(size=ls))+
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  theme(axis.text.x = element_text(vjust = -2))+
+  theme(axis.text.y = element_text(hjust = -0.5))
+
+setwd("D:/landform_new/results")
+pdf("hypetune_matrix.pdf", paper="a4r", height=3.9, width=10)
+par(mfrow=c(1,3))
+
+# vp1 <- plotViewport(c(0,24,0))
+# 
+# print(F1,vp=vp1)
+
+grid.arrange(F1,F2, F3, nrow=1)
+
+#plot(F3)
+
+dev.off
+
+```
+
+```{r probability plot_2m_5m_10m}
+
+rf_tr2m<-rf_tr2$pred
+rf_tr5m<-rf_tr5$pred
+rf_tr10m<-rf_tr10$pred
+
+rf_tr2m$max<-pmax(rf_tr2m$UP, rf_tr2m$R,rf_tr2m$CvS, rf_tr2m$CxS,rf_tr2m$PS, rf_tr2m$C, rf_tr2m$VB)
+rf_tr2m$match<-as.numeric(rf_tr2m$pred == rf_tr2m$obs)
+
+rf_tr5m$max<-pmax(rf_tr5m$UP, rf_tr5m$R,rf_tr5m$CvS, rf_tr5m$CxS,rf_tr5m$PS, rf_tr5m$C, rf_tr5m$VB)
+rf_tr5m$match<-as.numeric(rf_tr5m$pred == rf_tr5m$obs)
+
+rf_tr10m$max<-pmax(rf_tr10m$UP, rf_tr10m$R,rf_tr10m$CvS, rf_tr10m$CxS,rf_tr10m$PS, rf_tr10m$C, rf_tr10m$VB)
+rf_tr10m$match<-as.numeric(rf_tr10m$pred == rf_tr10m$obs)
+
+
+plot1<-hist(subset(rf_tr2m$max, rf_tr2m$match==1))
+
+
+plot(plot1)
+par(new=T)
+boxplot(subset(rf_tr2m$max, rf_tr2m$match==1),
+        horizontal=T, ylab = "")
+
+setwd("D:/landform_new/results")
+pdf("match_miss_prob.pdf", paper="a4r", height=10, width=6)
+par(mfrow=c(3,3), mar=c(0.5, 0.5, 3, 0.2), oma = c(4, 4, 0.2, 0.2))
+
+boxplot(subset(rf_tr2m$max, rf_tr2m$match==1),
+        subset(rf_tr2m$max, rf_tr2m$match==0),
+        ylab = xlab1, names=c("Match", "Miss"))
+boxplot(subset(rf_tr5m$max, rf_tr5m$match==1),
+        subset(rf_tr5m$max, rf_tr5m$match==0),
+        ylab = xlab1, names=c("Match", "Miss"), yaxt="n")
+boxplot(subset(rf_tr10m$max, rf_tr10m$match==1),
+        subset(rf_tr10m$max, rf_tr10m$match==0), 
+        ylab = xlab1, names=c("Match", "Miss"), yaxt="n")
+
+hist(subset(rf_tr2m$max, rf_tr2m$match==1), 
+     breaks = b, xlab="", main="", ylab=xlab1)
+hist(subset(rf_tr5m$max, rf_tr5m$match==1), 
+     breaks = b, xlab="", main="", yaxt="n", ylab=NA)
+hist(subset(rf_tr10m$max, rf_tr10m$match==1), 
+     breaks = b, xlab=xlab1, main="", yaxt="n", ylab=NA)
+
+hist(subset(rf_tr2m$max, rf_tr2m$match==0), 
+     breaks = b, xlab=xlab1, main="", ylab=xlab1)
+hist(subset(rf_tr5m$max, rf_tr5m$match==0), 
+     breaks = b, xlab=xlab1, main="", yaxt="n", ylab=NA)
+hist(subset(rf_tr10m$max, rf_tr10m$match==0), 
+     breaks = b, xlab=xlab1, main="", yaxt="n", ylab=NA)
+
+
+
+dev.off()
+
+```
+
+
+```{r Predicted_image_Id_Frequency}
+
+# p2m_f<-freq(stack(ptrain_2m, ptest_2m, ptrainall_2m), useNA="no", merge=T)
+# p5m_f<-freq(stack(ptrain_5m, ptest_5m, ptrainall_5m), useNA="no", merge=T)
+# p10m_f<-freq(stack(ptrain_10m, ptest_10m, ptrainall_10m), useNA="no", merge=T)
+
+# p2m_f<-as.data.frame (freq(ptrain_2m, useNA="no"))
+# p5m_f<-as.data.frame (freq(ptrain_5m, useNA="no"))
+# p10m_f<-as.data.frame (freq(ptrain_10m, useNA="no"))
+
+
+setwd("D:/landform_new/results")
+pdf("lanfdorm_frequency.pdf", paper="a4r", height=4, width=12)
+par(mfrow=c(1,3),mai = c(0.6, 0.6, 0.8, 0))
+
+l= c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+##l= c("Upland\n plateau", "Ridge", "Concave\n slope", "Convex\n slope", "Planar\n slope", "Channel", "Valley\n bottom")
+
+
+bp1<-barplot(100*p2m_f$count/sum(p2m_f$count), space = 0, xlab="Landform", ylab="Frequency(%)", cex.axis = fa, 
+             cex.lab =cex1)
+axis(1,at=bp1,labels= l, cex.axis = fa)
+
+bp2<-barplot(100*p5m_f$count/sum(p5m_f$count), space = 0, xlab="Landform", ylab="Frequency(%)", cex.axis = fa, 
+             cex.lab =cex1)
+axis(1,at=bp1,labels= l, cex.axis = fa)
+
+bp3<-barplot(100*p10m_f$count/sum(p10m_f$count), space = 0, xlab="Landform", ylab="Frequency(%)", cex.axis = fa, 
+             cex.lab =cex1)
+axis(1,at=bp1,labels= l, cex.axis = fa)
+
+dev.off()
+
+
+# setwd("G:/Nina_landform/rf_results/all_table")
+# 
+# write.xlsx(p2m_f, file="Predicted_Freq.xlsx", sheetName="2m", row.names=FALSE)
+# 
+# capture.output(p2m_f, file = "Predicted_Freq_2m.txt", append = FALSE)
+
+```
+
+```{r observed_predicted_geometries_2m}
+
+# ptrain_2m<-raster("D:/landform_new/results/predicted/rf_tr2_2m.img", na.rm=TRUE)
+# spv_2m<-stack(ptrain_2m, r2_2m, r4_2m, r7_2m, r8_2m)
+# sb1 <- brick(spv_2m)
+
+setwd("D:/landform_new/results")
+pdf("ob_pr_geometry_2m.pdf", paper="a4r", height=12, width=9)
+par(mfrow=c(2,2),mai = c(0.7, 0.7, 0.3, 0.3))
+
+l= c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+mp = 100000; bw = 0.3; bc = "black"; t1 = 1:7-0.2; t2 = 1:7+0.2; ml=1.5; bg="light gray"
+fa=1.1
+
+
+boxplot(v1_2m$slp ~ v1_2m$landform, outline=F, medlwd=ml, xaxt="n", xlab = "Landform", ylab = "Slope",
+        boxwex=bw, at = t1, col="white", ylim = c(0, 50), cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis=fa)
+boxplot(sb1$slp, sb1$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, col = bg, boxwex=bw, at = t2)
+legend("topleft", inset=.02, c("Observed","Predicted"), fill = c("white", "light gray"), horiz=TRUE, cex=fa)
+
+
+boxplot(v1_2m$swi2 ~ v1_2m$landform, outline=F,  medlwd=ml, xaxt="n", boxwex=bw, at = t1, 
+        xlab = "Landform", ylab = "Wetness Index", col="white", ylim = c(0, 12), cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis=fa)
+boxplot(sb1$swi2, sb1$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_2m$plc ~ v1_2m$landform, outline=F,  medlwd=ml, xaxt="n", xlab = "Landform", ylab = "Plan Curvature",
+        boxwex=bw, at = t1, col="white", ylim = c(-25, 15), cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l,  cex.axis=fa)
+boxplot(sb1$plc, sb1$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_2m$sr ~ v1_2m$landform, outline=F,  xlab = "Landform", ylab = "Surface Roughness", 
+        medlwd=ml, xaxt="n", boxwex=bw, at = t1, col="white", cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l,  cex.axis=fa)
+boxplot(sb1$sr, sb1$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, col = bg, boxwex=bw, at = t2)
+
+
+dev.off()
+
+
+```
+
+```{r observed_predicted_geometries_5m}
+# ptrain_5m<-raster("D:/landform_new/results/predicted/rf_tr5_5m.img", na.rm=TRUE)
+# spv_5m<-stack(ptrain_5m, r2_5m, r4_5m, r7_5m, r8_5m)
+# sb2 <- brick(spv_5m)
+
+setwd("D:/landform_new/results")
+pdf("ob_pr_geometry_5m.pdf", paper="a4r", height=12, width=9)
+par(mfrow=c(2,2),mai = c(0.7, 0.7, 0.3, 0.3))
+
+l= c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+mp = 100000; bw = 0.3; bc = "black"; t1 = 1:7-0.2; t2 = 1:7+0.2; ml=1.5; bg="light gray"
+fa=1.1
+
+boxplot(v1_5m$slp ~ v1_5m$landform, outline=F, col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Slope", ylim = c(0, 50), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb2$slp, sb2$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+legend("topleft", inset=.02, c("Observed","Predicted"), fill = c("white", "light gray"),
+       horiz=TRUE, cex=fa)
+
+
+boxplot(v1_5m$swi5 ~ v1_5m$landform, outline=F, col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Wetness Index", ylim = c(0, 13), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb2$swi5, sb2$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_5m$plc ~ v1_5m$landform, outline=F,  col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Plan Curvature", ylim = c(-25, 15), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb2$plc, sb2$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_5m$sr ~ v1_5m$landform, outline=F,  col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Surface Roughness",ylim = c(0, 13), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb2$sr, sb2$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+dev.off()
+
+```
+
+```{r observed_predicted_geometries_10m}
+# ptrain_10m<-raster("D:/landform_new/results/predicted/rf_tr10_10m.img", na.rm=TRUE)
+# spv_10m<-stack(ptrain_10m, r2_10m, r4_10m, r7_10m, r8_10m)
+# sb3 <- brick(spv_10m)
+
+setwd("D:/landform_new/results")
+pdf("ob_pr_geometry_10m.pdf", paper="a4r", height=12, width=9)
+par(mfrow=c(2,2),mai = c(0.7, 0.7, 0.3, 0.3))
+
+l= c("UP", "R", "CvS", "CxS", "PS", "C", "VB")
+mp = 100000; bw = 0.3; bc = "black"; t1 = 1:7-0.2; t2 = 1:7+0.2; ml=1.5; bg="light gray"
+fa=1.1
+
+
+boxplot(v1_10m$slp ~ v1_10m$landform, outline=F, col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Slope", ylim = c(0, 50), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb3$slp, sb3$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+legend("topleft", inset=.02, c("Observed","Predicted"), fill = c("white", "light gray"),
+       horiz=TRUE, cex = fa)
+
+
+boxplot(v1_10m$swi10 ~ v1_10m$landform, outline=F, col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Wetness Index", ylim = c(0, 13), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb3$swi10, sb3$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_10m$plc ~ v1_10m$landform, outline=F,  col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Plan Curvature", ylim = c(-25, 15), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb3$plc, sb3$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+
+boxplot(v1_10m$sr ~ v1_10m$landform, outline=F,  col="white", medlwd=ml, xaxt="n", boxwex=bw, xlab = "Landform", 
+        ylab = "Surface Roughness", ylim = c(0, 13), at = t1, cex.axis = fa, cex.lab=cex1)
+axis(1,at=1:7,labels= l, cex.axis = fa)
+boxplot(sb3$sr, sb3$Layer_1, maxpixels=mp, outline=F,  medlwd=ml, xaxt="n", add = TRUE, border = bc, 
+        col = bg, boxwex=bw, at = t2)
+
+dev.off()
+
+```
+
+
+```{r save data}
+save.image("D:/landform_new/tools/landform/lf1.RData")
+
+```
+
+```{r load data}
+load("D:/landform_new/tools/landform/lf1.RData")
+
+```
+
+
+####slope_elev_relief
+
+```{r elev_slp_bound_data}
+
+#bo <- readOGR('H:/207_data/My Passport/Nina_landform/data/bound1.shp')
+
+elc      = crop (r1_10m , extent(bo))
+slc      = crop (r2_10m , extent(bo))
+
+cellStats(slc$slp,mean)
+cellStats(slc$slp, sd)
+
+cellStats(elc$slp,mean)
+cellStats(elc$slp, sd)
+
+```
+
+```{r elevation_slope histogram}
+
+h1<-hist(elc, breaks = seq(200, 400,10))
+h1$density=100*h1$counts/sum(h1$counts)
+
+h2<-hist(slc, breaks = seq(0,90,5))
+h2$density=100*h2$counts/sum(h2$counts)
+
+```
+
+```{r plot elev_slp hist}
+
+setwd("D:/landform_new/results")
+pdf("elev_slope_hist.pdf", paper="a4r", height=10, width=4)
+par(mfrow=c(2,1))
+
+plot(h1, freq=F, ylab="Frequency (%)", xlab = "Elevation (m)", col="grey", main="")
+
+plot(h2, freq=F, ylab="Frequency (%)", xlab = "Slope (°)", col="grey", main="", xlim=c(0, 40))
+
+dev.off()
+
+```
+
+
+
